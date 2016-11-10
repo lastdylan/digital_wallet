@@ -228,7 +228,7 @@ bool friendTwoSearch(map<int, set<int> > &users, set<int> &payer_friends, int pa
 /* If payer and payee are O(2) friends, then they must have a friend in common.
 This function looks for an intersection between payer's friends and payee's friends.
 If present, it returns true. Otherwise, depending on the requested depth it either returns 
-false or passes the baton to a function that processes O(4) friendship. 
+false or passes the baton to a function that processes O(3) and O(4) friendships. 
 */
 
 	map<int, set<int> >::iterator it_payee = users.find(payee);
@@ -241,13 +241,12 @@ false or passes the baton to a function that processes O(4) friendship.
 		if(debug)cout<<"friendTwoSearch:: Finished search for common denominators"<<endl;
 
 		if( !decision && depth==3 ){
-			if(debug)cout<<"friendTwoSearch:: No friendship at O(2), proceeding to O(4)"<<endl;
+			if(debug)cout<<"friendTwoSearch:: No friendship at O(2), proceeding to O(3)/O(4)"<<endl;
 			decision = friendThreeSearch(users, payer_friends, it_payee->second, debug);
-			if(debug)cout<<"friendTwoSearch:: Finished with O(4) analysis"<<endl;
+			if(debug)cout<<"friendTwoSearch:: Finished with O(3)/O(4) analysis"<<endl;
 		}
 	}
 	
-		
 	if(decision)
 		return true;
 	else
@@ -259,32 +258,61 @@ false or passes the baton to a function that processes O(4) friendship.
 bool friendThreeSearch(map<int, set<int> > &users, set<int> &payer_friends, set<int> &payee_friends, bool debug){
 
 /* O(4) friends must share a friend in their set of friends of friends.
-This function loops through each pair of payee's and payer's friend of friends, 
-looking for intersections. 
-If present, it returns true, otherwise false
+For O(3) either payer_friends intersects with payee_friends' friends, or payee_friends intersects 
+with payer_friends' friends. 
+This function looks for O(3) intersections first. 
+If present, it returns true, otherwise it looks for O(4) intersections and returns true or false
 */
 
 	set<int>::iterator payer_friends_it;
 	set<int>::iterator payee_friends_it;
 
 	bool decision=false;
-	if(debug)cout<<"friendThreeSearch:: Looping through "<<payer_friends.size()<<" payer's friends"<<endl;
+	//Let's check if O(3) is satisfied before going O(4)
 	for( int payer_friend : payer_friends ){
 		map<int, set<int> >::iterator it = users.find(payer_friend);
 		if(it != users.end()){
-	if(debug)cout<<"friendThreeSearch:: Looping through "<<payee_friends.size()<<" payee's friends"<<endl;
-			for( int payee_friend : payee_friends ){
-				map<int, set<int> >::iterator it_payee = users.find(payee_friend);
-				if(it_payee != users.end()){
-					set<int> intersect;
-					set_intersection(it->second.begin(),it->second.end(),it_payee->second.begin(),it_payee->second.end(),inserter(intersect,intersect.begin()));
-					if( intersect.size() > 0 ){
-						decision=true;	
-						break;
-					}
-				}	
+			set<int> intersect;
+			set_intersection(it->second.begin(),it->second.end(),payee_friends.begin(),payee_friends.end(),inserter(intersect,intersect.begin()));
+			if( intersect.size() > 0 ){
+				decision=true;	
+				break;
 			}
-		}//if a user here is not in 'users' no problem, move on	
+		}
+	}
+	if(!decision){
+		for( int payee_friend : payee_friends ){
+			map<int, set<int> >::iterator it = users.find(payee_friend);
+			if(it != users.end()){
+				set<int> intersect;
+				set_intersection(it->second.begin(),it->second.end(),payer_friends.begin(),payer_friends.end(),inserter(intersect,intersect.begin()));
+				if( intersect.size() > 0 ){
+					decision=true;	
+					break;
+				}
+			}
+		}
+	}
+	//If O(3) failed, try O(4)
+	if(!decision){
+		if(debug)cout<<"friendThreeSearch:: Looping through "<<payer_friends.size()<<" payer's friends"<<endl;
+		for( int payer_friend : payer_friends ){
+			map<int, set<int> >::iterator it = users.find(payer_friend);
+			if(it != users.end()){
+				if(debug)cout<<"friendThreeSearch:: Looping through "<<payee_friends.size()<<" payee's friends"<<endl;
+				for( int payee_friend : payee_friends ){
+					map<int, set<int> >::iterator it_payee = users.find(payee_friend);
+					if(it_payee != users.end()){
+						set<int> intersect;
+						set_intersection(it->second.begin(),it->second.end(),it_payee->second.begin(),it_payee->second.end(),inserter(intersect,intersect.begin()));
+						if( intersect.size() > 0 ){
+							decision=true;	
+							break;
+						}
+					}	
+				}
+			}	
+		}
 	}
 
 	return decision;
