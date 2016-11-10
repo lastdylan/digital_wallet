@@ -6,259 +6,380 @@
 #include <stdlib.h>
 #include <ctime>
 #include <time.h>
+#include <chrono>
 #include <set>
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <iomanip>
 
 using namespace std;
+typedef std::chrono::high_resolution_clock Clock;
 
-map<int, set<int> > getRecords(const string &inputFile);
+map<int, set<int> > getRecords(const string &inputFile, bool debug);
 
-bool friendSearch(map<int, set<int> >, int, int, int, int);
-bool friendfriendSearch(map<int, set<int> >, set<int>, int, int, int, int);
+bool friendSearch(map<int, set<int> > &users, int payer, int payee, int depth, bool debug=false);
+bool friendTwoSearch(map<int, set<int> > &users, set<int> &payer_friends, int payee, int depth, bool debug=false);
+bool friendThreeSearch(map<int, set<int> > &users, set<int> &payer_friends, set<int> &payee_friends, bool debug=false);
 
 int main(int argc, char** argv){
 
-	if(argc<5)cerr<<"Please input a file"<<endl;
-	string inputfile = argv[1];
-	string testfile = argv[2];
-	int depth = stoi(string(argv[3]));
+	if(argc<6){
+		cout<<"Usage : ./antifraud <batch_input> <stream_input> <output_1> <output_2> <output_3> <XTRA_FLAGS>"<<endl;
+		cout<<"Please specify at least input and output files!"<<endl;
+		return 0;
+	}
 
-	ofstream outfile;
-	outfile.open(argv[4]);
+	//grab batch and stream input file names
+	string batch_input = argv[1];
+	string stream_input = argv[2];
 
-	clock_t rec = clock();
-	map<int, set<int> > payers = getRecords(inputfile);
-	rec = clock() - rec;
+	//grab output file names and open them
+	ofstream outfile1, outfile2, outfile3;
+	outfile1.open(argv[3]);
+	outfile2.open(argv[4]);
+	outfile3.open(argv[5]);
 
-	outfile<<"It took "<<rec/CLOCKS_PER_SEC<<" seconds to grab "<<payers.size()<<" records"<<endl;
+	//set special control flags [1)debug and 2) depth of friendship, 3 being friendship to the 4th order]
+	bool debug=false;
+	int depth=3;
+	for(int i=6;i<argc;++i){
+		if(string(argv[i])=="--debug")debug=true;
+		else if(string(argv[i])=="--depth"){
+			depth=atoi(argv[i+1]);
+		}
+	}
 
-	ifstream  testData(testfile);
-  string testLine;
+	//map every user in the batch file with a set of friends 
+	auto rec_start = Clock::now();
+	map<int, set<int> > users = getRecords(batch_input, debug);
+	auto rec_end = Clock::now();
 
-  while(std::getline(testData,testLine)){
+	if(debug)cout<<"Grabbed records from batch file in "<<chrono::duration_cast<chrono::seconds>(rec_end - rec_start).count()<<" seconds"<<endl;
+
+	//start streaming new transactions
+	ifstream  streamData(stream_input.c_str());
+  string streamLine;
+
+	cout<<"Starting to stream transactions ... "<<endl;
+  int event_counter=0;
+	auto start_stream = Clock::now();
+  while(getline(streamData,streamLine)){
 
 		//skip the header line
-		if(testLine.find("time") == 0 )continue;
+		if(streamLine.find("time") == 0 )continue;
+    event_counter++;
+
+    if(event_counter%100000==0) cout << event_counter << endl;
 
 		//grab a line as a transaction
-    stringstream lineStream(testLine);
+    stringstream lineStream(streamLine);
     string cell;		
 		int counter=0;
 		int id1,id2;
-  	while(std::getline(lineStream,cell,',')){
+  	while(getline(lineStream,cell,',')){
 			if(counter==1)id1=stoi(cell);
 			else if(counter==2)id2=stoi(cell);
 		
 			counter++;	
 		}
-	
-		//'payers' starts as an empty set and builds up as we run through transactions
-		clock_t t = clock();
-		bool checkTrust = friendSearch(payers, id1, id2, depth, 0);
-    t = clock() - t; 
-		if (checkTrust)outfile<<"trusted ... "<<(float)t/CLOCKS_PER_SEC<<endl;
-		else outfile<<"unverified ... "<<(float)t/CLOCKS_PER_SEC<<endl;
-	}
 
-	outfile.close();
+		//assess friendships between id1 and id2, from the map users
+		auto t1 = Clock::now();
+		bool checkTrust = friendSearch(users, id1, id2, 0, false);
+		auto t2 = Clock::now();
+
+		if (checkTrust)
+			outfile1<<"trusted";
+		else if(!checkTrust)
+			outfile1<<"unverified";
+		if (debug)
+			outfile1<<" ... "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds";
+		outfile1<<endl;
+
+		if(depth>0){
+			t1 = Clock::now();
+			bool checkTrust = friendSearch(users, id1, id2, 1,false);
+			t2 = Clock::now();
+
+			if (checkTrust)
+				outfile2<<"trusted";
+			else if(!checkTrust)
+				outfile2<<"unverified";
+			if (debug)
+				outfile2<<" ... "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds";
+			outfile2<<endl;
+			
+			if(depth==3){
+				t1 = Clock::now();
+				bool checkTrust = friendSearch(users, id1, id2, depth, debug);
+				t2 = Clock::now();
+
+				if (checkTrust)
+					outfile3<<"trusted";
+				else if(!checkTrust)
+					outfile3<<"unverified";
+				if (debug)
+					outfile3<<" ... "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds";
+				outfile3<<endl;
+			}
+		}
+	}
+	auto end_stream = Clock::now();
+	cout<<"Done streaming in "<<chrono::duration_cast<chrono::minutes>(end_stream - start_stream).count()<<" minutes"<<endl;
+
+	outfile1.close();
+	outfile2.close();
+	outfile3.close();
 	return 0;
 }
 
-map<int, set<int> > getRecords(const string &inputFile){
+//-------------------------------------------------------------------------------
+
+map<int, set<int> > getRecords(const string &batchFile, bool debug){
 
 	FILE *file;
-	file = fopen(inputFile.c_str(),"r");
+	file = fopen(batchFile.c_str(),"r");
 
 	const int headerSize=65536;
 	char header[headerSize];
 	fgets(header, headerSize, file);
 
-	//Fill each line into a map<payer, set<payees> >
-	map<int, set<int> > payers;
+	//Fill each line into a map<user, set<friends> > ... friends could be payers or payees!
+	map<int, set<int> > users;
 	char time[256];
 	int id1, id2;
 	float amount;
+	int event_counter;
 	while (!feof(file)){
+    event_counter++;
+    if(event_counter%100000==0 && debug) cout << event_counter << endl;
+
 		fscanf(file,"%20[^,], %i, %i, %f", time, &id1, &id2, &amount);
+
+	  //message field has length of largely varying sizes; handle separately; 'header' is just a buffer
 		fgets(header, headerSize, file);
 
-		map<int, set<int> >::iterator it = payers.find(id1);
-		set<int> friendSet;
+		//add payee to payer's friends
+		map<int, set<int> >::iterator it_id1 = users.find(id1);
 	
-		if(it != payers.end()){
-			friendSet = it->second;
-			friendSet.insert(id2);
-			it->second = friendSet;
+		if(it_id1 != users.end()){
+			it_id1->second.insert(id2);
 		}
 		else {
-			friendSet.insert(id2);
-			pair<int, set<int> > setPair = make_pair(id1, friendSet);
-			payers.insert(setPair);		
+			set<int> id1_friends;
+			id1_friends.insert(id2);
+			users.insert(make_pair(id1, id1_friends));		
+		}	
+
+	 	//add payer to payee's friends
+		map<int, set<int> >::iterator it_id2 = users.find(id2);
+
+	  if(it_id2 != users.end()){
+			it_id2->second.insert(id1);		
+		}
+		else {
+			set<int> id2_friends;
+			id2_friends.insert(id1);
+			users.insert(make_pair(id2, id2_friends));		
 		}	
 	}
-	return payers;
+	return users;
 }
 
-//map<int, set<int> > getRecords(const string &inputFile){
+//-------------------------------------------------------------------------------
+
+bool friendSearch(map<int, set<int> > &users, int payer, int payee, int depth, bool debug){
+
+/*This function looks for payee in payer's O(1) friend network.
+If found, it returns true. Otherwise, depending on the requested 
+depth of friend network, it either returns false or calls a function that 
+processes O(2) friends
+*/
+
+	map<int, set<int> >::iterator it = users.find(payer);
+
+	bool decision=false;
+	if ( it != users.end() ){
+		if(debug)cout<<"friendSearch:: Found payer in users"<<endl;
+		set<int>::iterator set_it = it->second.find(payee);
+		if(set_it != it->second.end() ){	
+			if(debug)cout<<"friendSearch:: Found payee in payer's friend network"<<endl;
+			decision=true;
+		}
+		else if(depth>0){
+			if(debug)cout<<"friendSearch:: Payee not in payer's friend network, proceeding to O(2) network"<<endl;
+			decision = friendTwoSearch(users, it->second, payee, depth, debug);
+		}
+	}
+
+	if(decision){
+		if(debug)cout<<"friendSearch:: Transaction verified"<<endl;
+		return true;
+	}
+	else
+		return false;
+}
+
+//-------------------------------------------------------------------------------
+
+bool friendTwoSearch(map<int, set<int> > &users, set<int> &payer_friends, int payee, int depth, bool debug){
+
+/* If payer and payee are O(2) friends, then they must have a friend in common.
+This function looks for an intersection between payer's friends and payee's friends.
+If present, it returns true. Otherwise, depending on the requested depth it either returns 
+false or passes the baton to a function that processes O(4) friendship. 
+*/
+
+	map<int, set<int> >::iterator it_payee = users.find(payee);
+	bool decision=false;
+	if ( it_payee != users.end() ){
+		if(debug)cout<<"friendTwoSearch:: Found payee in users, now searching for common denominators ..."<<endl;
+		set<int> intersect;
+		set_intersection(it_payee->second.begin(),it_payee->second.end(),payer_friends.begin(),payer_friends.end(),inserter(intersect,intersect.begin()));
+		if( intersect.size() > 0 )decision=true;	
+		if(debug)cout<<"friendTwoSearch:: Finished search for common denominators"<<endl;
+
+		if( !decision && depth==3 ){
+			if(debug)cout<<"friendTwoSearch:: No friendship at O(2), proceeding to O(4)"<<endl;
+			decision = friendThreeSearch(users, payer_friends, it_payee->second, debug);
+			if(debug)cout<<"friendTwoSearch:: Finished with O(4) analysis"<<endl;
+		}
+	}
+	
+		
+	if(decision)
+		return true;
+	else
+		return false;
+}
+
+
+//-------------------------------------------------------------------------------
 //
-//	std::ifstream  data(inputFile);
-//  std::string line;
+//bool friendTwoSearch(map<int, set<int> > &users, set<int> &payer_friends, int payee, int depth, bool debug){
 //
-//	map<int, set<int> > payers;
-//  while(std::getline(data,line)){
-//		if(line.find("time") == 0 )continue;
+///* If payer and payee are O(2) friends, then they must have a friend in common.
+//This function looks for an intersection between payer's friends and payee's friends.
+//If present, it returns true. Otherwise, depending on the requested depth it either returns 
+//false or passes the baton to a function that processes O(4) friendship. 
+//*/
 //
-//    std::stringstream lineStream(line);
-//    std::string cell;		
+//	map<int, set<int> >::iterator it_payee = users.find(payee);
 //
-//		int counter=0;
-//		int id1, id2;
-//  	while(std::getline(lineStream,cell,',')){
-//			if(counter==1){
-//				id1=stoi(cell);
-//			}
-//			else if(counter==2){
-//				id2=stoi(cell);
+//	bool decision=false;
+//	if ( it_payee != users.end() ){
+//	//	if(debug)cout<<"friendTwoSearch:: Found payee in users, now searching for common denominators between payer and payee friends ..."<<endl;
+//	//	auto t1 = Clock::now();
+//		for( int payer_friend : payer_friends){
+//			if(it_payee->second.find(payer_friend) != it_payee->second.end()){
+//				decision=true;
+//				break;
 //			}	
-//			counter++;	
 //		}
-//
-//		map<int, set<int> >::iterator it = payers.find(id1);
-//		set<int> friendSet;
+//		//auto t2 = Clock::now();
+//	//	if(debug)cout<<"friendTwoSearch:: Finished search for common denominators in "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds"<<endl;
+//		if( !decision && depth==3 ){
+//	//		if(debug)cout<<"friendTwoSearch:: No friendship at O(2), proceeding to O(4) ... "<<endl;
+//	//		t1 = Clock::now();
+//			decision = friendThreeSearch(users, payer_friends, it_payee->second, debug);
+//	//		t2 = Clock::now();
+//	//		if(debug)cout<<"friendTwoSearch:: Finished with O(4) analysis in "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds"<<endl;
+//		}
+//	}
 //		
-//		if(it != payers.end()){
-//			friendSet = it->second;
-//			friendSet.insert(id2);
-//			it->second = friendSet;
-//		}
-//		else {
-//			friendSet.insert(id2);
-//			pair<int, set<int> > setPair = make_pair(id1, friendSet);
-//			payers.insert(setPair);		
-//		}	
-//	}
-//
-//	return payers;
-//}
-
-bool friendSearch(map<int, set<int> > payers, int payer, int payee, int depth, int counter=0){
-
-//	cout<<"Check 0"<<endl;
-	map<int, set<int> >::iterator it = payers.find(payer);
-
-//	cout<<"Check 1"<<endl;
-	//update payers if new payer
-	if ( it != payers.end() ){
-		set<int> friends = it->second;
-		set<int>::iterator set_it = friends.find(payee);
-		if(set_it != friends.end() ){	
-			return true;
-		}
-		else if (depth > 0){
-			counter++;
-			set<int>::iterator f_it;
-			int ff=0;
-			set<int> failedFriends;
-			for(f_it = friends.begin(); f_it != friends.end(); ++f_it){
-	//			cout<<"Entering for loop, at friend :"<<ff<<endl;
-				int ffriend = *f_it;
-				if (friendfriendSearch(payers, failedFriends, ffriend, payee, depth, counter)){
-	//				cout<<"found friend through recursion"<<endl;
-					return true;	
-				} 
-				failedFriends.insert(ffriend);
-				ff++;
-			}			
-	//		cout<<"For loop ended with no friends"<<endl;
-			return false;
-		}	
-		else return false;
-	}
-	else {
-		return false;
-	}
-}
-
-//bool friendSearch(map<int, set<int> > payers, int payer, int payee, int depth, int counter=0){
-//
-////	cout<<"Check 0"<<endl;
-//	map<int, set<int> >::iterator it = payers.find(payer);
-//
-////	cout<<"Check 1"<<endl;
-//	//update payers if new payer
-//	if ( it != payers.end() ){
-//		set<int> friends = it->second;
-//		set<int>::iterator set_it = friends.find(payee);
-//		if(set_it != friends.end() ){	
-//			return true;
-//		}
-//		else if (depth > 0){
-//			counter++;
-//			set<int>::iterator f_it;
-//			int ff=0;
-//			for(f_it = friends.begin(); f_it != friends.end(); ++f_it){
-//	//			cout<<"Entering for loop, at friend :"<<ff<<endl;
-//				int ffriend = *f_it;
-//				if (friendfriendSearch(payers, ffriend, payee, depth, counter)){
-//	//				cout<<"found friend through recursion"<<endl;
-//					return true;	
-//				} 
-//				ff++;
-//			}			
-//	//		cout<<"For loop ended with no friends"<<endl;
-//			return false;
-//		}	
-//		else return false;
-//	}
-//	else {
+//	if(decision)
+//		return true;
+//	else
 //		return false;
-//	}
 //}
+//
+//-------------------------------------------------------------------------------
 
-bool friendfriendSearch(map<int, set<int> > payers, set<int> failedFriends, int payer, int payee, int depth, int counter=1){
-//	cout<<"Counter is :"<<counter<<endl;
-	if(counter > depth){ //depth of friendship ... 3 is (friend)^4
-	//	cout<<"recursion depth too much, returning false"<<endl;
-		return false;
-	}
+//bool friendThreeSearch(map<int, set<int> > &users, set<int> &payer_friends, set<int> &payee_friends, bool debug){
+//
+//
+//	set<int>::iterator payer_friends_it;
+//	set<int>::iterator payee_friends_it;
+//
+//	set<int> payer_friends_friends;
+////	if(debug) cout<<"friendThreeSearch:: About to manipulate "<<payer_friends.size()<<" payer friends"<<endl; 
+////	if(debug)cout<<"friendThreeSearch:: Gathering O(3) friend network for payer ... "<<endl;
+//	auto t1 = Clock::now();
+//	for( int payer_friend : payer_friends ){
+//		map<int, set<int> >::iterator it = users.find(payer_friend);
+//		if(it != users.end()){
+//			for(int fr : it->second){
+//				payer_friends_friends.insert(fr);
+//			}
+//		}//if a user here is not in 'users' no problem, move on	
+//	}
+//	auto t2 = Clock::now();
+////	if(debug)cout<<"friendThreeSearch:: Done in "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds"<<endl;
+//
+////	if(debug) cout<<"friendThreeSearch:: About to manipulate "<<payee_friends.size()<<" payee friends"<<endl; 
+////	if(debug)cout<<"friendThreeSearch:: Gathering O(3) friend network for payee ... "<<endl;
+//	t1 = Clock::now();
+//	set<int> payee_friends_friends;
+//	for( int payee_friend : payee_friends ){
+//		map<int, set<int> >::iterator it = users.find(payee_friend);
+//		if(it != users.end()){
+//		auto a = Clock::now();
+//		payee_friends_friends.insert(it->second.begin(), it->second.end());
+//		auto b = Clock::now();
+//		cout<<"Take "<<chrono::duration_cast<chrono::microseconds>(b-a).count()<<" microseconds"<<endl;
+//		}//if a user here is not in 'users' no problem, move on	
+//	}
+//	t2 = Clock::now();
+////	if(debug)cout<<"friendThreeSearch:: Done in "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds"<<endl;
+//
+//	bool decision=false;
+////	if(debug)cout<<"friendThreeSearch:: Finding common denominator friends in the two O(3) networks ... "<<endl;
+//	t1 = Clock::now();
+//	for(int payer : payer_friends_friends){
+//		set<int>::iterator f_tmp_it = payee_friends_friends.find(payer);
+//		if(f_tmp_it != payee_friends_friends.end()){
+//			decision=true;
+//			break;	
+//		}
+//	}
+//	t2 = Clock::now();
+////	if(debug)cout<<"friendThreeSearch:: Done in "<<chrono::duration_cast<chrono::microseconds>(t2 - t1).count()<<" microseconds"<<endl;
+//
+//	return decision;
+//}
+//-------------------------------------------------------------------------------
 
-	//if it has failed before, it will fail again
-	set<int>::iterator failed_it = failedFriends.find(payer);
-	if(failed_it == failedFriends.end())
-		return false;
+bool friendThreeSearch(map<int, set<int> > &users, set<int> &payer_friends, set<int> &payee_friends, bool debug){
 
-//	cout<<"Check 0"<<endl;
-	map<int, set<int> >::iterator it = payers.find(payer);
+/* O(4) friends must share a friend in their set of friends of friends.
+This function loops through each pair of payee's and payer's friend of friends, 
+looking for intersections. 
+If present, it returns true, otherwise false
+*/
 
-//	cout<<"Check 1"<<endl;
-	//update payers if new payer
-	if ( it != payers.end() ){
-		set<int> friends = it->second;
-		set<int>::iterator set_it = friends.find(payee);
-		if(set_it != friends.end() ){	
-			return true;
-		}
-		else{
-			counter++;
-			if(counter>depth){
-//				cout<<"recursion depth too much, returning false"<<endl;
-				return false;	
+	set<int>::iterator payer_friends_it;
+	set<int>::iterator payee_friends_it;
+
+	bool decision=false;
+	if(debug)cout<<"friendThreeSearch:: Looping through "<<payer_friends.size()<<" payer's friends"<<endl;
+	for( int payer_friend : payer_friends ){
+		map<int, set<int> >::iterator it = users.find(payer_friend);
+		if(it != users.end()){
+	if(debug)cout<<"friendThreeSearch:: Looping through "<<payee_friends.size()<<" payee's friends"<<endl;
+			for( int payee_friend : payee_friends ){
+				map<int, set<int> >::iterator it_payee = users.find(payee_friend);
+				if(it_payee != users.end()){
+					set<int> intersect;
+					set_intersection(it->second.begin(),it->second.end(),it_payee->second.begin(),it_payee->second.end(),inserter(intersect,intersect.begin()));
+					if( intersect.size() > 0 ){
+						decision=true;	
+						break;
+					}
+				}	
 			}
-			set<int>::iterator f_it;
-			set<int> failed_friendfriendFriends;
-			for(f_it = friends.begin(); f_it != friends.end(); ++f_it){
-				int ffriend = *f_it;
-				if (friendfriendSearch(payers, failed_friendfriendFriends, ffriend, payee, depth, counter)){
-					return true;	
-				} 
-				failed_friendfriendFriends.insert(ffriend);
-			}			
-			return false;
-		}	
+		}//if a user here is not in 'users' no problem, move on	
 	}
-	else {
-		return false;
-	}
-}	
+
+	return decision;
+}
