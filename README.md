@@ -1,7 +1,7 @@
 # Digital Wallet challenge (Insight Data Engineering)
 A full description of this challenge is at https://github.com/InsightDataScience/digital-wallet.
 
-I responded to this challenge in C++. See src/antifraud.cxx.
+I respond to the challenge in C++. For the finer details, feel free to dig into src/antifraud.cxx.
 
 I read transactions from paymo_input/batch_payment.txt, a file that contains about 4 million trusted transactions. While reading each transaction, I map each user's ID to a set of their immediate friends. Call this level of friendship O(1). This operation is done once by a function called get_records(<inputs>). This operation should take at most 14 seconds. This map is then passed (by reference) multiple times as the program runs. 
 
